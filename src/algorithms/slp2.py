@@ -89,41 +89,43 @@ def run(table_name):
     result = train(locs_known, edge_list)
 
 
-def train(locs_known, edge_list, num_iters, dispersion_threshold=50):
+def train(locs_known, edge_list, num_iters, neighbor_threshold=3, dispersion_threshold=100):
     '''
-      Inputs:
-      locs_known => (src_id, vertex)
-      edge_list  => (src_id, (dest_id, weight))
-      line 0:  attach the locations to each of the sources in the edges... (src_id, ((dst_id, weight), src_vertex))
-      line 1:  get the src and coord in value in prep for group by...      (dst_id, (Vertex, weight))
-      line 2:  filter out those edges where a Vertex has no geoCoord...    (dst_id, (Vertex, weight)) #has geocoord
-      line 3:  group by in prep for neighbor operations...                 (dst_id, [(Vertex, weight)..])
-      line 4:  filter out nodes with fewer than 2 neighbors...             (dst_id, [(Vertex, weight)..]) # >2
-      line 5:  add back in known locs so we only predict unknown...        (dst_id, ([(Vertex, weight)..], hasLoc))
-      line 6:  only keep the nodes we are trying to predict...             (dst_id, ([(Vertex, weight)..], hasLoc))
-      line 7:  apply the median to the neighbors...                        (dst_id, (median_vtx, neighbors))
-      line 8:  given the median, filter out high dispersion....            (dst_id, (median_vtx, neighbors)) <disp
-      line 9:  prepare for the union by adjusting format...                (dst_id, median_coord)
-      line 8:  union to create the global location rdd...                  (dst_id, median_geoCoord)
+        Inputs:
+        locs_known => (src_id, vertex)
+        edge_list  => (src_id, (dest_id, weight))
+        line 0:  attach the locations to each of the sources in the edges... (src_id, ((dst_id, weight), src_vertex))
+        line 1:  get the src and coord in value in prep for group by...      (dst_id, (Vertex, weight))
+        line 2:  filter out those edges where a Vertex has no geoCoord...    (dst_id, (Vertex, weight)) #has geocoord
+        line 3:  group by in prep for neighbor operations...                 (dst_id, [(Vertex, weight)..])
+        line 4:  filter out nodes with fewer than 2 neighbors...             (dst_id, [(Vertex, weight)..]) # >2
+        line 5:  add back in known locs so we only predict unknown...        (dst_id, ([(Vertex, weight)..], hasLoc))
+        line 6:  only keep the nodes we are trying to predict...             (dst_id, ([(Vertex, weight)..], hasLoc))
+        line 7:  apply the median to the neighbors...                        (dst_id, (median_vtx, neighbors))
+        line 8:  given the median, filter out high dispersion....            (dst_id, (median_vtx, neighbors)) <disp
+        line 9:  prepare for the union by adjusting format...                (dst_id, median_coord)
+        line 8:  union to create the global location rdd...                  (dst_id, median_geoCoord)
     '''
 
-    NEIGHBOR_THRESHOLD = 2
+    # Filter edge list so we never attempt to estimate a "known" location
+    filtered_edge_list = edge_list.leftOuterJoin(locs_known_wo_holdout)\
+        .filter(lambda (src_id, ((dst_id, weight), loc_known)) : loc_known is None)\
+        .map(lambda (dst_id, ((src_id, weight), loc_known)): (src_id, (dst_id, weight)))
 
     l = locs_known
 
     for i in range(num_iters):
-        l = edge_list.join(l)\
+        l = filtered_edge_list.join(l)\
         .map(lambda (src_id, ((dst_id, weight), known_vertex)) : (dst_id, (known_vertex, weight)))\
         .groupByKey()\
         .filter(lambda (src_id, neighbors) : neighbors.maxindex > NEIGHBOR_THRESHOLD)\
-        .leftOuterJoin(locs_known)\
-        .filter(lambda (src_id, (neighbors, hasLoc)) : hasLoc is None)\
-        .map(lambda (src_id, (neighbors, locLoc)) :\
-           (src_id, median(haversine, [v for v,w in neighbors],[w for v,w in neighbors])))\
-        .filter(lambda (src_id, vertex): vertex.dispersion < dispersion_threshold)\
+        .map(lambda (src_id, neighbors) :\
+          (src_id, median(haversine2, [v for v,w in neighbors],[w for v,w in neighbors])))\
+        .filter(lambda (src_id, estimated_loc): estimated_loc.dispersion < dispersion_threshold)\
         .union(locs_known)
 
     return l
+
 
 holdout_10pct = lambda (src_id) : src_id[-1] == '6'
 
