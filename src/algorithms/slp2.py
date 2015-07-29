@@ -85,7 +85,7 @@ def get_edge_list(table_name):
 def run(table_name):
 
     locs_known = get_known_locs(table_name)
-    edge_list = get_edge_list(slp.options(table_name)
+    edge_list = get_edge_list(slp.options(table_name))
     result = train(locs_known, edge_list)
 
 
@@ -125,28 +125,37 @@ def train(locs_known, edge_list, num_iters, dispersion_threshold=50):
 
     return l
 
-def run_test(locs_known, edge_list,  holdout_func, num_iters=1, dispersion_threshold=50):
+holdout_10pct = lambda (src_id) : src_id[-1] == '6'
+
+
+def create_prediction_curve():
+    pass
+
+
+def run_test(locs_known, edge_list,  holdout_func, num_iters=1, dispersion_threshold=500):
     '''
-        holdout: keeps roughly 90% of the data
     '''
 
-    deltas =  locs_known.filter(lambda (src_id, vtx): holdout_func(src_id))\
-        .train(holdout_locs, edge_list, num_iters, dispersion_threshold)\
+    num_locs = locs_known.count()
+
+    #reserve a location set using the holdout function (should be approx 90%)
+    errors =  locs_known.filter(lambda (src_id, vtx): not holdout_func(src_id))\
+        .train(locs_reserved, edge_list, num_iters, dispersion_threshold)\
+        .filter(lambda (src_id, loc): holdout_func(src_id))\
         .join(locs_known)\
         .map(lambda (src_id, (vtx_found, vtx_actual)) :\
-            (src_id, haversine(vtx_found.geo_coord, vtx_actual.geo_coord)))\
+             (src_id, haversine(vtx_found.geo_coord, vtx_actual.geo_coord)))\
         .values()
 
-    num_locations = locs_known.count()
 
     #because cannot easily calculate median in RDDs we will bring deltas local for stats calculations.
     #With larger datasets, we may need to do this in the cluster, but for now will leave.
-    errors = deltas.collect()
+    errors_local = errors.collect()
 
     return {
-            'median': np.median(errors),
-            'mean': np.mean(errors),
-            'coverage':len(errors)/float(num_locations),
-            'num_locs': num_locations,
-            'iterations_completed': num_iters
-            }
+        'median': np.median(errors),
+        'mean': np.mean(errors),
+        'coverage':len(errors)/float(num_locs),
+        'num_locs': num_locs,
+        'iterations_completed': num_iters
+    }
