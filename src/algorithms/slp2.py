@@ -56,7 +56,7 @@ def median(distance_func, vertices, weights=None):
     return LocEstimate(geo_coord=vertices[idx].geo_coord, dispersion=np.median(m[idx]), dispersion_std_dev=np.std(m[idx]))
 
 
-def get_known_locs(table_name, min_locs=3):
+def get_known_locs(table_name, min_locs=3, num_paritions=30):
     '''
         Given a loaded twitter table, this will return all the twitter users with locations. A user's location is determined
         by the median location of all known tweets. A user must have at least min_locs locations in order for a location to be
@@ -65,20 +65,22 @@ def get_known_locs(table_name, min_locs=3):
     return sqlCtx.sql('select user.id_str, geo.coordinates from %s where geo.coordinates is not null' % table_name)\
         .map(lambda row: (row.id_str, row.coordinates)).groupByKey()\
         .filter(lambda (id_str,coord_list): len(coord_list) > min_locs)\
-            .map(lambda (id_str,coords): (id_str, median(haversine, [LocEstimate(GeoCoord(lat,lon), None, None) for lat,lon in coords]))).cache()
+            .map(lambda (id_str,coords): (id_str, median(haversine, [LocEstimate(GeoCoord(lat,lon), None, None)\
+                for lat,lon in coords]))).coalesce(num_paritions)cache()
 
 
-def get_edge_list(table_name):
+def get_edge_list(table_name, num_paritions=300):
     '''
         Given a loaded twitter table, this will return the @mention network in the form (src_id, (dest_id, num_@mentions))
     '''
     tmp_edges = sqlCtx.sql('select user.id_str, entities.user_mentions from %s where size(entities.user_mentions) > 0' %\
-                           slp.options['temp_table_name']).flatMap(lambda row : [((row.id_str, mentioned_user.id_str),1)\
-                                                                                 for mentioned_user in row.user_mentions]).reduceByKey(lambda x,y:x+y)
+        table_name).flatMap(lambda row : [((row.id_str, mentioned_user.id_str),1)\
+            for mentioned_user in row.user_mentions if mentioned_user.id_str is not None and row.id_str !=  mentioned_user.id_str]])\
+                .reduceByKey(lambda x,y:x+y)
 
     return tmp_edges.map(lambda ((src_id,dest_id),num_mentions):\
                                       ((dest_id,src_id),num_mentions)).join(tmp_edges).\
-            map(lambda ((src_id,dest_id), (count0, count1)): (src_id, (dest_id, min(count0,count1)))).cache()
+            map(lambda ((src_id,dest_id), (count0, count1)): (src_id, (dest_id, min(count0,count1)))).coalesce(num_paritions).cache()
 
 
 
