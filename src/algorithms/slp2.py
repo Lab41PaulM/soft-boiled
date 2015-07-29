@@ -1,4 +1,3 @@
-from math import floor, radians, sin, cos, asin, sqrt, pi
 import numpy as np
 import itertools
 from collections import namedtuple
@@ -12,7 +11,7 @@ def haversine(x, y):
         From: http://stackoverflow.com/questions/4913349/haversine-formula-in-python-bearing-and-distance-between-two-gps-points
         Calculate the great circle distance between two points
         on the earth (specified in decimal degrees)
-    """
+        """
 
     #if either distance is None return None
     if x is None or y is None:
@@ -31,7 +30,7 @@ def median(distance_func, vertices, weights=None):
     """
         given a python list of vertices, and a distance function, this will find the vertex that is most central
         relative to all other vertices. All of the vertices must have geocoords
-    """
+        """
 
     #get the distance between any two points
     distances = map(lambda (v0, v1) :distance_func(v0.geo_coord, v1.geo_coord), itertools.combinations(vertices, 2))
@@ -49,40 +48,42 @@ def median(distance_func, vertices, weights=None):
             m[k0].append(distance/weights[k0])
             m[k1].append(distance/weights[k1])
 
-    summed_values = map(sum, m.itervalues())
+summed_values = map(sum, m.itervalues())
 
     idx = summed_values.index(min(summed_values))
 
     return LocEstimate(geo_coord=vertices[idx].geo_coord, dispersion=np.median(m[idx]), dispersion_std_dev=np.std(m[idx]))
 
 
-def get_known_locs(table_name, min_locs=3, num_paritions=30):
+def get_known_locs(table_name, min_locs=3, num_paritions=30, dispersion_threshold=50):
     '''
         Given a loaded twitter table, this will return all the twitter users with locations. A user's location is determined
         by the median location of all known tweets. A user must have at least min_locs locations in order for a location to be
         estimated
-    '''
+        '''
     return sqlCtx.sql('select user.id_str, geo.coordinates from %s where geo.coordinates is not null' % table_name)\
         .map(lambda row: (row.id_str, row.coordinates)).groupByKey()\
-        .filter(lambda (id_str,coord_list): len(coord_list) > min_locs)\
+        .filter(lambda (id_str,coord_list): len(coord_list) >= min_locs)\
             .map(lambda (id_str,coords): (id_str, median(haversine, [LocEstimate(GeoCoord(lat,lon), None, None)\
-                for lat,lon in coords]))).coalesce(num_paritions)cache()
+                                                                     for lat,lon in coords])))\
+                                                                     .filter(lambda (id_str, loc): loc.dispersion < dispersion_threshold)\
+                                                                     .coalesce(num_paritions).cache()
 
 
 def get_edge_list(table_name, num_paritions=300):
     '''
         Given a loaded twitter table, this will return the @mention network in the form (src_id, (dest_id, num_@mentions))
-    '''
-    tmp_edges = sqlCtx.sql('select user.id_str, entities.user_mentions from %s where size(entities.user_mentions) > 0' %\
-        table_name).flatMap(lambda row : [((row.id_str, mentioned_user.id_str),1)\
-            for mentioned_user in row.user_mentions if mentioned_user.id_str is not None and row.id_str !=  mentioned_user.id_str]])\
-                .reduceByKey(lambda x,y:x+y)
+        '''
+    tmp_edges = sqlCtx.sql('select user.id_str, entities.user_mentions from %s where size(entities.user_mentions) > 0' % table_name)\
+        .flatMap(lambda row : [((row.id_str, mentioned_user.id_str),1)\
+                               for mentioned_user in row.user_mentions\
+                               if mentioned_user.id_str is not None and row.id_str !=  mentioned_user.id_str])\
+            .reduceByKey(lambda x,y:x+y)
 
-    return tmp_edges.map(lambda ((src_id,dest_id),num_mentions):\
-                                      ((dest_id,src_id),num_mentions)).join(tmp_edges).\
-            map(lambda ((src_id,dest_id), (count0, count1)): (src_id, (dest_id, min(count0,count1)))).coalesce(num_paritions).cache()
-
-
+return tmp_edges.map(lambda ((src_id,dest_id),num_mentions): ((dest_id,src_id),num_mentions))\
+    .join(tmp_edges)\
+        .map(lambda ((src_id,dest_id), (count0, count1)): (src_id, (dest_id, min(count0,count1))))\
+        .coalesce(num_paritions).cache()
 
 def run(table_name):
 
@@ -107,26 +108,26 @@ def train(locs_known, edge_list, num_iters, neighbor_threshold=3, dispersion_thr
         line 8:  given the median, filter out high dispersion....            (dst_id, (median_vtx, neighbors)) <disp
         line 9:  prepare for the union by adjusting format...                (dst_id, median_coord)
         line 8:  union to create the global location rdd...                  (dst_id, median_geoCoord)
-    '''
+        '''
 
     # Filter edge list so we never attempt to estimate a "known" location
-    filtered_edge_list = edge_list.leftOuterJoin(locs_known_wo_holdout)\
+    filtered_edge_list = edge_list.leftOuterJoin(locs_known)\
         .filter(lambda (src_id, ((dst_id, weight), loc_known)) : loc_known is None)\
         .map(lambda (dst_id, ((src_id, weight), loc_known)): (src_id, (dst_id, weight)))
 
     l = locs_known
 
-    for i in range(num_iters):
-        l = filtered_edge_list.join(l)\
+for i in range(num_iters):
+    l = filtered_edge_list.join(l)\
         .map(lambda (src_id, ((dst_id, weight), known_vertex)) : (dst_id, (known_vertex, weight)))\
         .groupByKey()\
-        .filter(lambda (src_id, neighbors) : neighbors.maxindex > NEIGHBOR_THRESHOLD)\
+        .filter(lambda (src_id, neighbors) : neighbors.maxindex >= neighbor_threshold)\
         .map(lambda (src_id, neighbors) :\
-          (src_id, median(haversine2, [v for v,w in neighbors],[w for v,w in neighbors])))\
-        .filter(lambda (src_id, estimated_loc): estimated_loc.dispersion < dispersion_threshold)\
-        .union(locs_known)
+             (src_id, median(haversine2, [v for v,w in neighbors],[w for v,w in neighbors])))\
+             .filter(lambda (src_id, estimated_loc): estimated_loc.dispersion < dispersion_threshold)\
+             .union(locs_known)
 
-    return l
+return l
 
 
 holdout_10pct = lambda (src_id) : src_id[-1] == '6'
@@ -138,28 +139,27 @@ def create_prediction_curve():
 
 def run_test(locs_known, edge_list,  holdout_func, num_iters=1, dispersion_threshold=500):
     '''
-    '''
+        '''
 
     num_locs = locs_known.count()
 
-    #reserve a location set using the holdout function (should be approx 90%)
-    errors =  locs_known.filter(lambda (src_id, vtx): not holdout_func(src_id))\
-        .train(locs_reserved, edge_list, num_iters, dispersion_threshold)\
+    reserved_locs = locs_known.filter(lambda (src_id, loc): not holdout_func(src_id))
+
+    errors = train(reserved_locs, edge_list, num_iters, dispersion_threshold)\
         .filter(lambda (src_id, loc): holdout_func(src_id))\
         .join(locs_known)\
         .map(lambda (src_id, (vtx_found, vtx_actual)) :\
-             (src_id, haversine(vtx_found.geo_coord, vtx_actual.geo_coord)))\
-        .values()
+             (src_id, haversine(vtx_found.geo_coord, vtx_actual.geo_coord)))
 
+    error_values = errors.values()
+    errors_local = errors.collect()
 
     #because cannot easily calculate median in RDDs we will bring deltas local for stats calculations.
     #With larger datasets, we may need to do this in the cluster, but for now will leave.
-    errors_local = errors.collect()
-
     return {
-        'median': np.median(errors),
-        'mean': np.mean(errors),
-        'coverage':len(errors)/float(num_locs),
-        'num_locs': num_locs,
-        'iterations_completed': num_iters
+        'median': np.median(errors_local),
+            'mean': np.mean(errors_local),
+            'coverage':len(errors_local)/float(num_locs),
+            'num_locs': num_locs,
+            'iterations_completed': num_iters
     }
