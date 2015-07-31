@@ -163,3 +163,26 @@ def run_test(locs_known, edge_list,  holdout_func, num_iters=1, dispersion_thres
             'num_locs': num_locs,
             'iterations_completed': num_iters
     }
+
+def estimator(edge_list, locs_known):
+    print 'Building the error estimation curve'
+
+    # Filter edge list so we never attempt to estimate a "known" location
+    filtered_edge_list = edge_list.leftOuterJoin(locs_known)\
+        .filter(lambda (src_id, ((dst_id, weight), loc_known)) : loc_known is None)\
+        .map(lambda (dst_id, ((src_id, weight), loc_known)): (src_id, (dst_id, weight)))
+
+    r =  filtered_edge_list.join(locs_known)\
+        .map(lambda (src_id, ((dst_id, weight), src_loc)) : (dst_id, (src_loc, weight)))\
+        .groupByKey()\
+        .flatMapValues(lambda neighbors : median(haversine, [loc for loc,w in neighbors], [w for loc,w in neighbors]))\
+        .join(locs_known)\
+        .flatMapValues(lambda (found_loc, known_loc) : ((haversine(known_loc.geo_coord,  found_loc.geo_coord)\
+                                                         - found_loc.dispersion)/known_loc.dispersion_std_dev, found_loc))\
+        .values()
+
+    sample = r.sample(False, .1, 20)
+    local_r = sample.collect()
+    sorted_vals = np.sort(local_r)
+    yvals=np.arange(len(sorted_vals)/float(len(sorted_vals)))
+    return pd.DataFrame(np.column_stack((sorted_vals, yvals)), columns=["std_range", "pct_within_med"])
