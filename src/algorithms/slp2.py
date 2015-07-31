@@ -186,3 +186,53 @@ def estimator(edge_list, locs_known):
     sorted_vals = np.sort(local_r)
     yvals=np.arange(len(sorted_vals)/float(len(sorted_vals)))
     return pd.DataFrame(np.column_stack((sorted_vals, yvals)), columns=["std_range", "pct_within_med"])
+
+
+
+def predict_probability_radius(self, dist, median_dist, std_dev, prediction_curve):
+    '''
+    dist: distance specified which we want the probability for
+    median_dist: dispersion
+    std_dev: standard deviation of the dispersion
+    '''
+
+    try:
+        
+        dist_diff = dist-median_dist
+        if std_dev>0:
+            stdev_mult = dist_diff/std_dev
+        else:
+            stdev_mult=0
+        rounded_stdev = np.around(stdev_mult, decimals=3)
+        predict_pct_median=0
+        max_std = np.max(predictions_curve['std_range'])
+        min_std = np.min(predictions_curve['std_range'])
+        if (rounded_stdev< max_std and rounded_stdev>min_std) :
+            predict_med = predictions_curve.ix[(self.predictions_curve.std_range-rounded_stdev).abs().argsort()[:1]]
+            predict_pct_median = predict_med.iloc[0]['pct_within_med']
+        elif rounded_stdev< max_std:
+            predict_pct_median = 1
+
+    except:
+        predict_pct_median = None
+
+    prob = predict_pct_median
+    return prob
+    
+
+def predict_probability_area(self, upper_bound, lower_bound, center, med_error, std_dev):
+    '''
+    center: geoCoord
+    upper_bound: geoCoord
+    lower_bound: geoCoord
+    '''
+    
+    top_dist = haversine(center, geoCoord(upper_bound.lat, center.lon))
+    bottom_dist = haversine(center, geoCoord(lower_bound.lat, center.lon))
+    r_dist = haversine(center, geoCoord(center.lat, upper_bound.lon))
+    l_dist = haversine(center, geoCoord(center.lat, lower_bound.lon))
+    min_dist = min([top_dist, bottom_dist, r_dist, l_dist])
+    max_dist = max([top_dist, bottom_dist, r_dist, l_dist])
+    min_prob = SLP.predict_probability_radius(min_dist, med_error, std_dev)
+    max_prob = SLP.predict_probability_radius(max_dist, med_error, std_dev)
+    return (min_prob, max_prob)
