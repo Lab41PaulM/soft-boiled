@@ -133,10 +133,6 @@ return l
 holdout_10pct = lambda (src_id) : src_id[-1] == '6'
 
 
-def create_prediction_curve():
-    pass
-
-
 def run_test(locs_known, edge_list,  holdout_func, num_iters=1, dispersion_threshold=500):
     '''
         '''
@@ -197,7 +193,7 @@ def predict_probability_radius(self, dist, median_dist, std_dev, prediction_curv
     '''
 
     try:
-        
+
         dist_diff = dist-median_dist
         if std_dev>0:
             stdev_mult = dist_diff/std_dev
@@ -218,7 +214,7 @@ def predict_probability_radius(self, dist, median_dist, std_dev, prediction_curv
 
     prob = predict_pct_median
     return prob
-    
+
 
 def predict_probability_area(self, upper_bound, lower_bound, center, med_error, std_dev):
     '''
@@ -226,7 +222,7 @@ def predict_probability_area(self, upper_bound, lower_bound, center, med_error, 
     upper_bound: geoCoord
     lower_bound: geoCoord
     '''
-    
+
     top_dist = haversine(center, geoCoord(upper_bound.lat, center.lon))
     bottom_dist = haversine(center, geoCoord(lower_bound.lat, center.lon))
     r_dist = haversine(center, geoCoord(center.lat, upper_bound.lon))
@@ -236,3 +232,66 @@ def predict_probability_area(self, upper_bound, lower_bound, center, med_error, 
     min_prob = SLP.predict_probability_radius(min_dist, med_error, std_dev)
     max_prob = SLP.predict_probability_radius(max_dist, med_error, std_dev)
     return (min_prob, max_prob)
+
+
+
+def load_model(self, input_fname):
+    """
+        Load a pre-trained model
+
+        @input_fname: csv file
+
+        return:
+    """
+    if input_fname.endswith('.gz'):
+        input_file = gzip.open(input_fname, 'rb')
+    else:
+        input_file = open(input_fname, 'rb')
+    csv_reader = csv.reader(input_file)
+    updated_locations_local = []
+    original_user_locations_local = []
+
+    for usr_id, lat, lon, median, std_dev in csv_reader:
+        loc_estimate = LocEstimate(GeoCoord(float(lat), float(lon)), median, std_dev)
+        if len(median) > 0:
+            # Estimated user location
+            self.updated_locations_local.append((usr_id, loc_estimate))
+        else:
+            self.original_user_locations_local.append((usr_id, loc_estimate))
+
+    return (sc.parallelize(self.updated_locations_local),sc.parallelize(original_user_locations_local))
+
+
+def save_model(self, output_fname, locs):
+    """
+        :output_fname: csv file to serialize to
+        :locs: RRD result from the train function
+
+        Save the current model for future use
+    """
+    if output_fname.endswith('.gz'):
+        output_file = gzip.open(output_fname, 'w')
+    else:
+        output_file = open(output_fname, 'w')
+
+    csv_writer = csv.writer(output_file)
+
+    #collect on rdd
+    locs_local = locs.collect()
+
+    for (src_id, loc_estimate) in locs_local:
+
+        results_object = user_location[1]
+        lat = results_object[0][0]
+        lon = results_object[0][1]
+        dispersion = results_object[1]
+        mean = results_object[2]
+        std_dev = results_object[3]
+
+        csv_writer.writerow([src_id,\
+            loc_estimate.geo_coord.lat,\
+            loc_estimate.geo_coord.lon,\
+            loc_estimate.dispersion,\
+            loc_estimate.dispersion_std_dev])
+
+    output_file.close()
