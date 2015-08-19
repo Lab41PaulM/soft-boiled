@@ -216,13 +216,13 @@ def evaluate(locs_known, edges, holdout_func, slp_closure):
         .filter(lambda (src_id, loc): holdout_func(src_id))\
         .join(locs_known)\
         .map(lambda (src_id, (vtx_found, vtx_actual)) :\
-             haversine(vtx_found.geo_coord, vtx_actual.geo_coord))
+             (src_id, (haversine(vtx_found.geo_coord, vtx_actual.geo_coord), vtx_found)))
 
-    errors_local = errors.collect()
+    errors_local = errors.map(lambda (src_id, (dist, est_loc)) : dist).collect()
 
     #because cannot easily calculate median in RDDs we will bring deltas local for stats calculations.
     #With larger datasets, we may need to do this in the cluster, but for now will leave.
-    return {
+    return (errors, {
         'median': np.median(errors_local),
         'mean': np.mean(errors_local),
         'coverage':len(errors_local)/float(total_locs - num_locs),
@@ -230,7 +230,7 @@ def evaluate(locs_known, edges, holdout_func, slp_closure):
         'total_locs':total_locs,
         'found_locs': len(errors_local),
         'holdout_ratio' : 1 - num_locs/float(total_locs)
-    }
+    })
 
 def predict_country_slp(tweets, bounding_boxes):
     '''
