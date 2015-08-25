@@ -51,7 +51,7 @@ class EstimatorCurve:
                 self.lookup(max_dist, estimated_loc.dispersion_std_dev))
 
     @staticmethod
-    def load_from_rdds(locs_known, edges, desired_samples=1000):
+    def load_from_rdds(locs_known, edges, desired_samples=1000, dispersion_threshold=150):
         '''
         Creates an EstimatorCurve
 
@@ -78,8 +78,8 @@ class EstimatorCurve:
                        median(haversine, [loc for loc,w in neighbors], [w for loc,w in neighbors]))\
             .join(locs_known)\
             .mapValues(lambda (found_loc, known_loc) :\
-                (known_loc, found_loc, haversine(known_loc.geo_coord,  found_loc.geo_coord)))
-
+                (known_loc, found_loc, haversine(known_loc.geo_coord,  found_loc.geo_coord)))\
+            .filter(lambda (src_id, (found_loc, known_loc, dist)) : found_loc.dispersion < dispersion_threshold)
 
         #some medians might have std_devs of zero
         close_locs = medians.filter(lambda (src_id, (found_loc, known_loc, dist)) : found_loc.dispersion_std_dev == 0)
